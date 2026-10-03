@@ -34,6 +34,11 @@ connection:
   sslCertCheckEnabled: true
   sslVerifyHostname: true
   sslProtocols: ["TLSv1.2"]
+  # Number of retries to attempt when a request fails with NoHttpResponseException
+  # (typically caused by a stale/closed pooled connection being reused). This does
+  # not count the initial attempt. Defaults to 1 (i.e. 2 total attempts) if omitted.
+  # Set to 0 to disable retries entirely.
+  noHttpResponseRetryCount: 1
 
 controllerInfo:
   controllerHost: "controller"

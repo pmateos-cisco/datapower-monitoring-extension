@@ -15,6 +15,7 @@ import com.appdynamics.extensions.logging.ExtensionsLoggerFactory;
 import com.appdynamics.extensions.metrics.Metric;
 import com.appdynamics.extensions.util.StringUtils;
 import com.google.common.collect.Lists;
+import org.apache.http.NoHttpResponseException;
 import org.apache.http.client.methods.CloseableHttpResponse;
 import org.apache.http.client.methods.HttpPost;
 import org.apache.http.entity.ContentType;
@@ -103,32 +104,51 @@ public class BulkApiMetricFetcher extends MetricFetcher {
     protected Map<String, Xml[]> getResponse(Collection<String> operations, String domain) {
         String soapMessage = soapMessageUtil.createSoapMessage(operations, domain);
         String url = UrlBuilder.fromYmlServerConfig(server).build();
-        CloseableHttpResponse response = null;
-        try {
-            CloseableHttpClient httpClient = configuration.getContext().getHttpClient();
-            logger.debug("The SOAP Request Generated for the domain={} and operation={} is payload={} and url={}"
-                    , domain, operations, soapMessage,url);
-            HttpPost post = new HttpPost(url);
-            StringEntity entity = new StringEntity(soapMessage, ContentType.TEXT_XML);
-            post.setEntity(entity);
-            response = httpClient.execute(post);
-            String responseStr = EntityUtils.toString(response.getEntity());
-            if (response.getStatusLine().getStatusCode() == 200) {
-                return soapMessageUtil.getSoapResponseBody(responseStr, operations);
-            } else {
-                logger.error("Error (response code = {}) while fetching the data from absolute url={} and payload={}"
+        // NoHttpResponseException typically means a pooled/keep-alive connection was reused
+        // after the server (or a network intermediary) had already closed it. The request was
+        // never actually processed by the far end in that case, so retrying on a fresh
+        // connection is safe for this read-only, idempotent SOAP get-status call.
+        final int maxAttempts = getMaxAttempts();
+        for (int attempt = 1; attempt <= maxAttempts; attempt++) {
+            CloseableHttpResponse response = null;
+            try {
+                CloseableHttpClient httpClient = configuration.getContext().getHttpClient();
+                logger.debug("The SOAP Request Generated for the domain={} and operation={} is payload={} and url={}"
+                        , domain, operations, soapMessage,url);
+                HttpPost post = new HttpPost(url);
+                StringEntity entity = new StringEntity(soapMessage, ContentType.TEXT_XML);
+                post.setEntity(entity);
+                response = httpClient.execute(post);
+                String responseStr = EntityUtils.toString(response.getEntity());
+                if (response.getStatusLine().getStatusCode() == 200) {
+                    return soapMessageUtil.getSoapResponseBody(responseStr, operations);
+                } else {
+                    logger.error("Error (response code = {}) while fetching the data from absolute url={} and payload={}"
+                            , url, soapMessage);
+                    logger.error("The response code is {} and content is {}", response.getStatusLine(), responseStr);
+                    break;
+                }
+            } catch (NoHttpResponseException e) {
+                if (attempt < maxAttempts) {
+                    logger.warn("No response received for domain={}, operations={} on attempt {} of {} " +
+                            "(likely a stale pooled connection); retrying on a fresh connection.",
+                            domain, operations, attempt, maxAttempts);
+                } else {
+                    String msg = String.format("Error while fetching the data from absolute url=[%s] and payload=[%s]"
+                            , url, soapMessage);
+                    logger.error(msg, e);
+                }
+            } catch (Exception e) {
+                String msg = String.format("Error while fetching the data from absolute url=[%s] and payload=[%s]"
                         , url, soapMessage);
-                logger.error("The response code is {} and content is {}", response.getStatusLine(), responseStr);
-            }
-        } catch (Exception e) {
-            String msg = String.format("Error while fetching the data from absolute url=[%s] and payload=[%s]"
-                    , url, soapMessage);
-            logger.error(msg, e);
-        } finally {
-            if (response != null) {
-                try {
-                    response.close();
-                } catch (IOException e) {
+                logger.error(msg, e);
+                break;
+            } finally {
+                if (response != null) {
+                    try {
+                        response.close();
+                    } catch (IOException e) {
+                    }
                 }
             }
         }

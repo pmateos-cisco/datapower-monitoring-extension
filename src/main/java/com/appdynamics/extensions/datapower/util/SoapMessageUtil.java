@@ -149,7 +149,11 @@ public class SoapMessageUtil {
             }
             return xmls;
         } else {
-            logger.error("The {} returned null from the {}", operation, xml.toString());
+            // An empty <dp:status/> is a valid, successful DataPower response meaning
+            // there is simply no data for this status provider/domain in this interval
+            // (e.g. no HTTP traffic in the polled window). This is expected behavior,
+            // not a fetch/parsing failure, so it is logged at WARN rather than ERROR.
+            logger.warn("The {} status provider returned no data (empty <dp:status/>) from the response {}", operation, xml.toString());
         }
         return null;
     }

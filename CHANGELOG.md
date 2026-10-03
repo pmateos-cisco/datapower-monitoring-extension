@@ -37,4 +37,17 @@
 *  Fixed an XXE vulnerability in the XML parser used to read DataPower responses.
 *  Changed the sample config.yml to enable TLS certificate/hostname verification and TLSv1.2 by default.
 *  Updated extension commons to 2.2.20 and refreshed build tooling (Maven plugins, mockito, junit).
+
+### 2.0.3:
+*  Fixed appliance-wide status providers (SystemUsage, MemoryStatus, FilesystemStatus) being
+   queried against the wrong (non-default) domain when multiple domains are configured; they
+   now consistently use the `default` domain via `use-domain="default"` in metrics.xml, matching
+   the existing CPUUsage behavior.
+*  Added automatic retry (once, by default) when a request fails with NoHttpResponseException,
+   which typically indicates a stale pooled/keep-alive connection being reused after the server
+   or a network intermediary closed it. Configurable via the new `connection.noHttpResponseRetryCount`
+   setting in config.yml.
+*  Downgraded the "<stat> returned null" log message from ERROR to WARN, since an empty
+   `<dp:status/>` response is a valid, successful DataPower response (no data for that status
+   provider/domain in the polled interval), not a fetch or parsing failure.
     

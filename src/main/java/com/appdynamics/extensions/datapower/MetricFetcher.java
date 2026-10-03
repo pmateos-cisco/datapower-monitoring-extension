@@ -21,6 +21,7 @@ import com.appdynamics.extensions.util.StringUtils;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.google.common.base.Strings;
 import com.google.common.collect.Lists;
+import org.apache.http.NoHttpResponseException;
 import org.apache.http.client.methods.CloseableHttpResponse;
 import org.apache.http.client.methods.HttpPost;
 import org.apache.http.entity.ContentType;
@@ -98,6 +99,36 @@ public abstract class MetricFetcher implements Runnable {
     }
 
     protected abstract List<Metric> fetchMetrics(List<String> selectedDomains, String serverPrefix);
+
+    /**
+     * Resolves the number of HTTP attempts to make for a single SOAP call when the connection
+     * fails with a {@link org.apache.http.NoHttpResponseException} (e.g. a stale pooled
+     * connection). Configurable via 'connection.noHttpResponseRetryCount' in config.yml
+     * (number of retries, not counting the initial attempt). Defaults to 1 retry (2 total
+     * attempts) if not configured or if an invalid value is supplied.
+     */
+    protected int getMaxAttempts() {
+        int retryCount = 1;
+        try {
+            Map<String, ?> configYml = configuration.getConfigYml();
+            if (configYml != null) {
+                Object connectionObj = configYml.get("connection");
+                if (connectionObj instanceof Map) {
+                    Object retryObj = ((Map) connectionObj).get("noHttpResponseRetryCount");
+                    if (retryObj != null) {
+                        retryCount = Integer.parseInt(retryObj.toString().trim());
+                    }
+                }
+            }
+        } catch (Exception e) {
+            logger.warn("Invalid value configured for 'connection.noHttpResponseRetryCount', using the default of {} retries", retryCount, e);
+            retryCount = 1;
+        }
+        if (retryCount < 0) {
+            retryCount = 0;
+        }
+        return retryCount + 1;
+    }
 
     protected String getLabel(Xml xml, MetricConfig metricConfig) {
         String label = "";
@@ -181,31 +212,50 @@ public abstract class MetricFetcher implements Runnable {
     protected Xml[] getResponse(String operation, String domain) {
         String soapMessage = soapMessageUtil.createSoapMessage(operation, domain);
         String url = UrlBuilder.fromYmlServerConfig(server).build();
+        // NoHttpResponseException typically means a pooled/keep-alive connection was reused
+        // after the server (or a network intermediary) had already closed it. The request was
+        // never actually processed by the far end in that case, so retrying on a fresh
+        // connection is safe for this read-only, idempotent SOAP get-status call.
+        final int maxAttempts = getMaxAttempts();
+        for (int attempt = 1; attempt <= maxAttempts; attempt++) {
             CloseableHttpResponse response = null;
-        try {
-            CloseableHttpClient httpClient = configuration.getContext().getHttpClient();
-            logger.debug("The SOAP Request Generated for the domain={} and operation={} is payload={} and url={}"
-                    , domain, operation, soapMessage, url);
-            HttpPost post = new HttpPost(url);
-            StringEntity entity = new StringEntity(soapMessage, ContentType.TEXT_XML);
-            post.setEntity(entity);
-            response = httpClient.execute(post);
-            if (response.getStatusLine().getStatusCode() == 200) {
-                return soapMessageUtil.getSoapResponseBody(response.getEntity().getContent(), operation);
-            } else {
-                logger.error("Error while fetching the data from absolute url={} and payload={}"
-                        , url, soapMessage);
-                logger.error("The response is {}", EntityUtils.toString(response.getEntity()));
-            }
-        } catch (Exception e) {
-            String msg = String.format("Error while fetching the data from url=[%s] and payload=[%s]",
-                    url, soapMessage);
-            logger.error(msg, e);
-        } finally {
-            if (response != null) {
-                try {
-                    response.close();
-                } catch (IOException e) {
+            try {
+                CloseableHttpClient httpClient = configuration.getContext().getHttpClient();
+                logger.debug("The SOAP Request Generated for the domain={} and operation={} is payload={} and url={}"
+                        , domain, operation, soapMessage, url);
+                HttpPost post = new HttpPost(url);
+                StringEntity entity = new StringEntity(soapMessage, ContentType.TEXT_XML);
+                post.setEntity(entity);
+                response = httpClient.execute(post);
+                if (response.getStatusLine().getStatusCode() == 200) {
+                    return soapMessageUtil.getSoapResponseBody(response.getEntity().getContent(), operation);
+                } else {
+                    logger.error("Error while fetching the data from absolute url={} and payload={}"
+                            , url, soapMessage);
+                    logger.error("The response is {}", EntityUtils.toString(response.getEntity()));
+                    break;
+                }
+            } catch (NoHttpResponseException e) {
+                if (attempt < maxAttempts) {
+                    logger.warn("No response received for domain={}, operation={} on attempt {} of {} " +
+                            "(likely a stale pooled connection); retrying on a fresh connection.",
+                            domain, operation, attempt, maxAttempts);
+                } else {
+                    String msg = String.format("Error while fetching the data from url=[%s] and payload=[%s]",
+                            url, soapMessage);
+                    logger.error(msg, e);
+                }
+            } catch (Exception e) {
+                String msg = String.format("Error while fetching the data from url=[%s] and payload=[%s]",
+                        url, soapMessage);
+                logger.error(msg, e);
+                break;
+            } finally {
+                if (response != null) {
+                    try {
+                        response.close();
+                    } catch (IOException e) {
+                    }
                 }
             }
         }
