@@ -50,4 +50,8 @@
 *  Downgraded the "<stat> returned null" log message from ERROR to WARN, since an empty
    `<dp:status/>` response is a valid, successful DataPower response (no data for that status
    provider/domain in the polled interval), not a fetch or parsing failure.
+*  Added a DEBUG log message on every successful fetch (domain, operation, and which attempt
+   number out of maxAttempts succeeded), so enabling DEBUG logging on MetricFetcher/
+   BulkApiMetricFetcher makes it easy to gauge how often the NoHttpResponseException retry is
+   actually being used.
     
