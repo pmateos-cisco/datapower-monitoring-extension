@@ -121,6 +121,8 @@ public class BulkApiMetricFetcher extends MetricFetcher {
                 response = httpClient.execute(post);
                 String responseStr = EntityUtils.toString(response.getEntity());
                 if (response.getStatusLine().getStatusCode() == 200) {
+                    logger.debug("Successfully fetched data for domain={}, operations={} on attempt {} of {}"
+                            , domain, operations, attempt, maxAttempts);
                     return soapMessageUtil.getSoapResponseBody(responseStr, operations);
                 } else {
                     logger.error("Error (response code = {}) while fetching the data from absolute url={} and payload={}"

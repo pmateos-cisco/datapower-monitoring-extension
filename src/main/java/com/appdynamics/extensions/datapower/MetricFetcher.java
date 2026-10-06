@@ -228,6 +228,8 @@ public abstract class MetricFetcher implements Runnable {
                 post.setEntity(entity);
                 response = httpClient.execute(post);
                 if (response.getStatusLine().getStatusCode() == 200) {
+                    logger.debug("Successfully fetched data for domain={}, operation={} on attempt {} of {}"
+                            , domain, operation, attempt, maxAttempts);
                     return soapMessageUtil.getSoapResponseBody(response.getEntity().getContent(), operation);
                 } else {
                     logger.error("Error while fetching the data from absolute url={} and payload={}"
